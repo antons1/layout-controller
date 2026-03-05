@@ -1,0 +1,15 @@
+{application, layout_controller, [
+    {description, "DCC model train layout controller"},
+    {vsn, "0.1.0"},
+    {registered, []},
+    {mod, {layout_controller_app, []}},
+    {applications, [
+        kernel,
+        stdlib,
+        gproc
+    ]},
+    {env, []},
+    {modules, []},
+    {licenses, ["Apache-2.0"]},
+    {links, []}
+ ]}.
