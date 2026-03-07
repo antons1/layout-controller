@@ -135,6 +135,12 @@ handle_info({z21_event, {loco_info, #{address := Addr} = Info}}, State)
     },
     {noreply, NewState};
 
+handle_info({z21_event, connection_up}, State) ->
+    %% Connection (re)established - re-send our current state
+    send_drive_command(State),
+    z21_connection:get_loco_info(State#state.address),
+    {noreply, State};
+
 handle_info({z21_event, _}, State) ->
     %% Ignore events for other locos or events we don't care about
     {noreply, State};

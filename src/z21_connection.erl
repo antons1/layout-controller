@@ -51,9 +51,14 @@
 start_link(Z21Ip) ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [Z21Ip], []).
 
-%% Send a raw encoded packet to the z21
+%% Send a raw encoded packet to the z21.
+%% Silently drops the message if the connection process is down.
 send(Packet) ->
-    gen_server:cast(?SERVER, {send, Packet}).
+    try
+        gen_server:cast(?SERVER, {send, Packet})
+    catch
+        exit:{noproc, _} -> ok
+    end.
 
 track_power_on() ->
     send(z21_protocol:encode_track_power_on()).
@@ -98,6 +103,10 @@ init([Z21Ip]) ->
     erlang:send_after(?KEEPALIVE_INTERVAL, self(), keepalive),
 
     logger:notice("z21_connection started, connecting to ~s:~p", [Z21Ip, Z21Port]),
+
+    %% Notify subscribers that the connection is (re)established
+    z21_events:notify(connection_up),
+
     {ok, State}.
 
 handle_call(_Request, _From, State) ->

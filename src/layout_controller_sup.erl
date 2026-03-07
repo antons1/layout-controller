@@ -2,13 +2,13 @@
 %% @doc layout_controller top level supervisor.
 %%
 %% Supervision tree:
-%%   layout_controller_sup (rest_for_one)
+%%   layout_controller_sup (one_for_one)
 %%     ├── z21_events       (gen_server - event pub/sub)
 %%     ├── z21_connection    (gen_server - UDP connection to z21)
 %%     └── train_sup         (supervisor - one train gen_server per loco)
 %%
-%% rest_for_one: if z21_events crashes, restart it + everything after it.
-%% If z21_connection crashes, restart it + train_sup (trains need the connection).
+%% one_for_one: each child restarts independently. When z21_connection
+%% restarts, it notifies via z21_events so trains can re-send their state.
 %% @end
 %%%-------------------------------------------------------------------
 
@@ -28,7 +28,7 @@ init([]) ->
     Z21Ip = application:get_env(layout_controller, z21_ip, "192.168.0.111"),
 
     SupFlags = #{
-        strategy => rest_for_one,
+        strategy => one_for_one,
         intensity => 5,
         period => 10
     },

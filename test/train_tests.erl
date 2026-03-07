@@ -20,7 +20,8 @@ train_test_() ->
          fun train_requests_loco_info_on_start/1,
          fun train_reacts_to_power_off/1,
          fun train_reacts_to_emergency_stop/1,
-         fun train_updates_from_loco_info/1
+         fun train_updates_from_loco_info/1,
+         fun train_resends_state_on_connection_up/1
      ]}.
 
 setup() ->
@@ -187,4 +188,23 @@ train_updates_from_loco_info({_MockSocket, _ConnPid, _EventsPid, _TrainSupPid}) 
         State = train:get_state(3),
         ?assertEqual(75, maps:get(speed, State)),
         ?assertEqual(reverse, maps:get(direction, State))
+    end.
+
+train_resends_state_on_connection_up({MockSocket, _ConnPid, _EventsPid, _TrainSupPid}) ->
+    fun() ->
+        {ok, _} = train_sup:add_train(3),
+        flush_packets(MockSocket),
+        %% Set speed so the train has non-default state
+        train:set_speed(3, 75),
+        _ = recv_packet(MockSocket),
+        train:set_direction(3, reverse),
+        _ = recv_packet(MockSocket),
+        %% Simulate connection restart
+        z21_events:notify(connection_up),
+        timer:sleep(50),
+        %% Train should re-send its drive command and request loco info
+        {ok, DrivePacket} = recv_packet(MockSocket),
+        ?assertEqual(z21_protocol:encode_set_loco_drive(3, 75, reverse), DrivePacket),
+        {ok, InfoPacket} = recv_packet(MockSocket),
+        ?assertEqual(z21_protocol:encode_get_loco_info(3), InfoPacket)
     end.
