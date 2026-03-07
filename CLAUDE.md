@@ -16,6 +16,7 @@ Erlang/OTP application that controls DCC model train layouts via a Roco Z21 comm
 
 * Make small changes and commit often
 * Ask before making architecture decisions
+* Don't add yourself as co-author of commits
 
 ## Build & Run
 
@@ -24,7 +25,12 @@ rebar3 compile              # compile the project
 rebar3 shell                # start an interactive shell with the app running
 ```
 
-No test suite exists yet. The app requires a physical Z21 command station on the network.
+The app requires a physical Z21 command station on the network. Tests use a mock UDP socket.
+
+```bash
+rebar3 eunit                              # run all tests
+rebar3 eunit --module=z21_protocol_tests  # run a single test module
+```
 
 ## Configuration
 
