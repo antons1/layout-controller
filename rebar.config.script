@@ -1,0 +1,3 @@
+%% Disable QUIC support in emqtt — we don't need it and it requires cmake + MsQuic.
+os:putenv("BUILD_WITHOUT_QUIC", "1"),
+CONFIG.
