@@ -20,7 +20,10 @@ mqtt_bridge_test_() ->
          fun mqtt_set_speed_sends_drive_command/1,
          fun mqtt_set_direction_sends_drive_command/1,
          fun mqtt_stop_sends_speed_zero/1,
-         fun mqtt_emergency_stop_train_sends_speed_one/1
+         fun mqtt_emergency_stop_train_sends_speed_one/1,
+         fun mqtt_add_train_starts_process/1,
+         fun mqtt_remove_train_stops_process/1,
+         fun mqtt_list_trains_publishes_current/1
      ]}.
 
 setup() ->
@@ -193,4 +196,52 @@ mqtt_emergency_stop_train_sends_speed_one({MockSocket, _ConnPid, _EventsPid, _Tr
                           <<"{\"action\":\"emergency_stop\"}">>),
         {ok, Packet} = recv_packet(MockSocket),
         ?assertEqual(z21_protocol:encode_set_loco_drive(3, 1, forward), Packet)
+    end.
+
+%%====================================================================
+%% Inbound MQTT trains management tests
+%%====================================================================
+
+mqtt_add_train_starts_process({_MockSocket, _ConnPid, _EventsPid, _TrainSupPid, BridgePid}) ->
+    fun() ->
+        meck:reset(emqtt),
+        send_mqtt_message(BridgePid, <<"layout/trains/cmd">>,
+                          <<"{\"action\":\"add\",\"address\":5}">>),
+        ?assertNotEqual(undefined, train:pid(5)),
+        %% Should republish train list with the new train
+        Calls = find_publish_calls(<<"layout/trains/list">>),
+        ?assertMatch([{_, _, _}], Calls),
+        [{_, Payload, _}] = Calls,
+        Decoded = json:decode(Payload),
+        Addresses = lists:sort([maps:get(<<"address">>, T) || T <- Decoded]),
+        ?assertEqual([5], Addresses)
+    end.
+
+mqtt_remove_train_stops_process({_MockSocket, _ConnPid, _EventsPid, _TrainSupPid, BridgePid}) ->
+    fun() ->
+        {ok, _} = train_sup:add_train(5),
+        timer:sleep(50),
+        meck:reset(emqtt),
+        send_mqtt_message(BridgePid, <<"layout/trains/cmd">>,
+                          <<"{\"action\":\"remove\",\"address\":5}">>),
+        ?assertEqual(undefined, train:pid(5)),
+        %% Should republish train list without the removed train
+        Calls = find_publish_calls(<<"layout/trains/list">>),
+        ?assertMatch([{_, <<"[]">>, _}], Calls)
+    end.
+
+mqtt_list_trains_publishes_current({_MockSocket, _ConnPid, _EventsPid, _TrainSupPid, BridgePid}) ->
+    fun() ->
+        {ok, _} = train_sup:add_train(3),
+        {ok, _} = train_sup:add_train(7),
+        timer:sleep(50),
+        meck:reset(emqtt),
+        send_mqtt_message(BridgePid, <<"layout/trains/cmd">>,
+                          <<"{\"action\":\"list\"}">>),
+        Calls = find_publish_calls(<<"layout/trains/list">>),
+        ?assertMatch([{_, _, _}], Calls),
+        [{_, Payload, _}] = Calls,
+        Decoded = json:decode(Payload),
+        Addresses = lists:sort([maps:get(<<"address">>, T) || T <- Decoded]),
+        ?assertEqual([3, 7], Addresses)
     end.
