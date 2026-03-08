@@ -100,3 +100,110 @@ train_state_topic_test() ->
 
 train_state_topic_large_address_test() ->
     ?assertEqual(<<"layout/trains/9999/state">>, mqtt_bridge:train_state_topic(9999)).
+
+%%====================================================================
+%% Power command parsing tests
+%%====================================================================
+
+parse_power_on_test() ->
+    ?assertEqual({ok, power_on}, mqtt_bridge:parse_power_command(<<"on">>)).
+
+parse_power_off_test() ->
+    ?assertEqual({ok, power_off}, mqtt_bridge:parse_power_command(<<"off">>)).
+
+parse_power_emergency_stop_test() ->
+    ?assertEqual({ok, emergency_stop}, mqtt_bridge:parse_power_command(<<"emergency_stop">>)).
+
+parse_power_unknown_test() ->
+    ?assertEqual({error, unknown}, mqtt_bridge:parse_power_command(<<"bogus">>)).
+
+%%====================================================================
+%% Train management command parsing tests
+%%====================================================================
+
+parse_trains_add_test() ->
+    ?assertEqual({ok, {add, 3}},
+        mqtt_bridge:parse_trains_command(<<"{\"action\":\"add\",\"address\":3}">>)).
+
+parse_trains_remove_test() ->
+    ?assertEqual({ok, {remove, 7}},
+        mqtt_bridge:parse_trains_command(<<"{\"action\":\"remove\",\"address\":7}">>)).
+
+parse_trains_list_test() ->
+    ?assertEqual({ok, list},
+        mqtt_bridge:parse_trains_command(<<"{\"action\":\"list\"}">>)).
+
+parse_trains_unknown_action_test() ->
+    ?assertEqual({error, unknown},
+        mqtt_bridge:parse_trains_command(<<"{\"action\":\"fly\"}">>)).
+
+parse_trains_add_non_integer_address_test() ->
+    ?assertEqual({error, unknown},
+        mqtt_bridge:parse_trains_command(<<"{\"action\":\"add\",\"address\":\"three\"}">>)).
+
+%%====================================================================
+%% Per-train command parsing tests
+%%====================================================================
+
+parse_train_set_speed_test() ->
+    ?assertEqual({ok, {set_speed, 50}},
+        mqtt_bridge:parse_train_command(<<"{\"action\":\"set_speed\",\"value\":50}">>)).
+
+parse_train_set_speed_zero_test() ->
+    ?assertEqual({ok, {set_speed, 0}},
+        mqtt_bridge:parse_train_command(<<"{\"action\":\"set_speed\",\"value\":0}">>)).
+
+parse_train_set_speed_max_test() ->
+    ?assertEqual({ok, {set_speed, 126}},
+        mqtt_bridge:parse_train_command(<<"{\"action\":\"set_speed\",\"value\":126}">>)).
+
+parse_train_set_speed_too_high_test() ->
+    ?assertEqual({error, unknown},
+        mqtt_bridge:parse_train_command(<<"{\"action\":\"set_speed\",\"value\":127}">>)).
+
+parse_train_set_speed_negative_test() ->
+    ?assertEqual({error, unknown},
+        mqtt_bridge:parse_train_command(<<"{\"action\":\"set_speed\",\"value\":-1}">>)).
+
+parse_train_set_direction_forward_test() ->
+    ?assertEqual({ok, {set_direction, forward}},
+        mqtt_bridge:parse_train_command(<<"{\"action\":\"set_direction\",\"value\":\"forward\"}">>)).
+
+parse_train_set_direction_reverse_test() ->
+    ?assertEqual({ok, {set_direction, reverse}},
+        mqtt_bridge:parse_train_command(<<"{\"action\":\"set_direction\",\"value\":\"reverse\"}">>)).
+
+parse_train_set_direction_invalid_test() ->
+    ?assertEqual({error, unknown},
+        mqtt_bridge:parse_train_command(<<"{\"action\":\"set_direction\",\"value\":\"sideways\"}">>)).
+
+parse_train_stop_test() ->
+    ?assertEqual({ok, stop},
+        mqtt_bridge:parse_train_command(<<"{\"action\":\"stop\"}">>)).
+
+parse_train_emergency_stop_test() ->
+    ?assertEqual({ok, emergency_stop},
+        mqtt_bridge:parse_train_command(<<"{\"action\":\"emergency_stop\"}">>)).
+
+parse_train_unknown_action_test() ->
+    ?assertEqual({error, unknown},
+        mqtt_bridge:parse_train_command(<<"{\"action\":\"explode\"}">>)).
+
+%%====================================================================
+%% Topic parsing tests
+%%====================================================================
+
+parse_topic_train_cmd_test() ->
+    ?assertEqual({train_cmd, 3}, mqtt_bridge:parse_topic(<<"layout/trains/3/cmd">>)).
+
+parse_topic_train_cmd_large_address_test() ->
+    ?assertEqual({train_cmd, 9999}, mqtt_bridge:parse_topic(<<"layout/trains/9999/cmd">>)).
+
+parse_topic_train_state_not_cmd_test() ->
+    ?assertEqual(unknown, mqtt_bridge:parse_topic(<<"layout/trains/3/state">>)).
+
+parse_topic_invalid_address_test() ->
+    ?assertEqual(unknown, mqtt_bridge:parse_topic(<<"layout/trains/abc/cmd">>)).
+
+parse_topic_unrelated_test() ->
+    ?assertEqual(unknown, mqtt_bridge:parse_topic(<<"some/other/topic">>)).

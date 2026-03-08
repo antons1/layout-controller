@@ -19,7 +19,9 @@
 
 -record(state, {
     port :: port(),
-    mqtt_port :: inet:port_number()
+    os_pid :: integer() | undefined,
+    mqtt_port :: inet:port_number(),
+    config_file :: string() | undefined
 }).
 
 %%====================================================================
@@ -36,9 +38,18 @@ start_link(MqttPort) ->
 init([MqttPort]) ->
     process_flag(trap_exit, true),
     case start_mosquitto(MqttPort) of
-        {ok, Port} ->
-            logger:notice("mqtt_broker started mosquitto on port ~p", [MqttPort]),
-            {ok, #state{port = Port, mqtt_port = MqttPort}};
+        {ok, Port, ConfigFile} ->
+            OsPid = get_os_pid(Port),
+            case wait_for_port(MqttPort, 50, 100) of
+                ok ->
+                    logger:notice("mqtt_broker started mosquitto on port ~p", [MqttPort]),
+                    {ok, #state{port = Port, os_pid = OsPid, mqtt_port = MqttPort,
+                                config_file = ConfigFile}};
+                {error, timeout} ->
+                    kill_os_process(OsPid),
+                    port_close(Port),
+                    {stop, mosquitto_start_timeout}
+            end;
         {error, Reason} ->
             {stop, Reason}
     end.
@@ -60,10 +71,12 @@ handle_info({Port, {data, Data}}, #state{port = Port} = State) ->
 handle_info(_Info, State) ->
     {noreply, State}.
 
-terminate(_Reason, #state{port = Port}) when is_port(Port) ->
+terminate(_Reason, #state{port = Port, os_pid = OsPid}) when is_port(Port) ->
     port_close(Port),
+    kill_os_process(OsPid),
     ok;
-terminate(_Reason, _State) ->
+terminate(_Reason, #state{os_pid = OsPid}) ->
+    kill_os_process(OsPid),
     ok.
 
 %%====================================================================
@@ -77,13 +90,51 @@ start_mosquitto(MqttPort) ->
             logger:error("mqtt_broker: mosquitto not found in PATH"),
             {error, mosquitto_not_found};
         Path ->
+            ConfigFile = write_config(MqttPort),
             PortArgs = [
-                {args, ["-p", integer_to_list(MqttPort), "-v"]},
+                {args, ["-c", ConfigFile, "-v"]},
                 exit_status,
                 use_stdio,
                 stderr_to_stdout,
                 {line, 1024}
             ],
             Port = open_port({spawn_executable, Path}, PortArgs),
-            {ok, Port}
+            {ok, Port, ConfigFile}
     end.
+
+get_os_pid(Port) ->
+    case erlang:port_info(Port, os_pid) of
+        {os_pid, Pid} -> Pid;
+        undefined -> undefined
+    end.
+
+kill_os_process(undefined) -> ok;
+kill_os_process(OsPid) ->
+    os:cmd("kill " ++ integer_to_list(OsPid)),
+    ok.
+
+wait_for_port(_Port, _Interval, 0) ->
+    {error, timeout};
+wait_for_port(Port, Interval, Retries) ->
+    case gen_tcp:connect("127.0.0.1", Port, [], 100) of
+        {ok, Sock} ->
+            gen_tcp:close(Sock),
+            ok;
+        {error, _} ->
+            timer:sleep(Interval),
+            wait_for_port(Port, Interval, Retries - 1)
+    end.
+
+write_config(MqttPort) ->
+    ConfigContent = io_lib:format(
+        "listener ~p 127.0.0.1~n"
+        "allow_anonymous true~n"
+        "persistence false~n",
+        [MqttPort]),
+    ConfigFile = filename:join(
+        filename:basedir(user_cache, "layout_controller"),
+        "mosquitto.conf"),
+    ok = filelib:ensure_dir(ConfigFile),
+    ok = file:write_file(ConfigFile, ConfigContent),
+    ConfigFile.
+

@@ -28,6 +28,8 @@
 
 -ifdef(TEST).
 -export([encode_json/1, encode_train_state/1, decode_json/1, train_state_topic/1]).
+-export([parse_power_command/1, parse_train_command/1, parse_trains_command/1]).
+-export([parse_topic/1]).
 -endif.
 
 -record(state, {
@@ -130,63 +132,102 @@ subscribe_to_commands(Client) ->
 %%====================================================================
 
 handle_mqtt_message(<<"layout/track/power/cmd">>, Payload, _State) ->
-    case Payload of
-        <<"on">> -> z21_connection:track_power_on();
-        <<"off">> -> z21_connection:track_power_off();
-        <<"emergency_stop">> -> z21_connection:emergency_stop();
-        _ -> logger:warning("mqtt_bridge: unknown power command: ~s", [Payload])
+    case parse_power_command(Payload) of
+        {ok, Cmd} -> execute_power_command(Cmd);
+        {error, unknown} ->
+            logger:warning("mqtt_bridge: unknown power command: ~s", [Payload])
     end;
 
 handle_mqtt_message(<<"layout/trains/cmd">>, Payload, #state{mqtt_client = Client}) ->
-    case decode_json(Payload) of
-        #{<<"action">> := <<"add">>, <<"address">> := Addr} when is_integer(Addr) ->
+    case parse_trains_command(Payload) of
+        {ok, {add, Addr}} ->
             case train_sup:add_train(Addr) of
                 {ok, _Pid} -> publish_train_list(Client);
                 {error, Reason} ->
                     logger:warning("mqtt_bridge: failed to add train ~p: ~p", [Addr, Reason])
             end;
-        #{<<"action">> := <<"remove">>, <<"address">> := Addr} when is_integer(Addr) ->
+        {ok, {remove, Addr}} ->
             train_sup:remove_train(Addr),
             publish_train_list(Client);
-        #{<<"action">> := <<"list">>} ->
+        {ok, list} ->
             publish_train_list(Client);
-        _ ->
+        {error, unknown} ->
             logger:warning("mqtt_bridge: unknown trains command: ~s", [Payload])
     end;
 
-handle_mqtt_message(<<"layout/trains/", Rest/binary>>, Payload, _State) ->
-    case binary:split(Rest, <<"/">>) of
-        [AddrBin, <<"cmd">>] ->
-            case catch binary_to_integer(AddrBin) of
-                Addr when is_integer(Addr) ->
-                    handle_train_command(Addr, Payload);
-                _ ->
-                    logger:warning("mqtt_bridge: invalid train address: ~s", [AddrBin])
+handle_mqtt_message(Topic, Payload, _State) ->
+    case parse_topic(Topic) of
+        {train_cmd, Addr} ->
+            case parse_train_command(Payload) of
+                {ok, Cmd} -> execute_train_command(Addr, Cmd);
+                {error, unknown} ->
+                    logger:warning("mqtt_bridge: unknown train command for ~p: ~s", [Addr, Payload])
             end;
-        _ -> ok
-    end;
+        unknown ->
+            logger:debug("mqtt_bridge: unhandled topic: ~s", [Topic])
+    end.
 
-handle_mqtt_message(Topic, _Payload, _State) ->
-    logger:debug("mqtt_bridge: unhandled topic: ~s", [Topic]).
+%%====================================================================
+%% Command parsing (pure functions)
+%%====================================================================
 
-handle_train_command(Addr, Payload) ->
+parse_power_command(<<"on">>) -> {ok, power_on};
+parse_power_command(<<"off">>) -> {ok, power_off};
+parse_power_command(<<"emergency_stop">>) -> {ok, emergency_stop};
+parse_power_command(_) -> {error, unknown}.
+
+parse_trains_command(Payload) ->
+    case decode_json(Payload) of
+        #{<<"action">> := <<"add">>, <<"address">> := Addr} when is_integer(Addr) ->
+            {ok, {add, Addr}};
+        #{<<"action">> := <<"remove">>, <<"address">> := Addr} when is_integer(Addr) ->
+            {ok, {remove, Addr}};
+        #{<<"action">> := <<"list">>} ->
+            {ok, list};
+        _ ->
+            {error, unknown}
+    end.
+
+parse_train_command(Payload) ->
     case decode_json(Payload) of
         #{<<"action">> := <<"set_speed">>, <<"value">> := Speed}
           when is_integer(Speed), Speed >= 0, Speed =< 126 ->
-            train:set_speed(Addr, Speed);
-        #{<<"action">> := <<"set_direction">>, <<"value">> := DirBin} ->
-            case DirBin of
-                <<"forward">> -> train:set_direction(Addr, forward);
-                <<"reverse">> -> train:set_direction(Addr, reverse);
-                _ -> logger:warning("mqtt_bridge: invalid direction: ~s", [DirBin])
-            end;
+            {ok, {set_speed, Speed}};
+        #{<<"action">> := <<"set_direction">>, <<"value">> := <<"forward">>} ->
+            {ok, {set_direction, forward}};
+        #{<<"action">> := <<"set_direction">>, <<"value">> := <<"reverse">>} ->
+            {ok, {set_direction, reverse}};
         #{<<"action">> := <<"stop">>} ->
-            train:stop(Addr);
+            {ok, stop};
         #{<<"action">> := <<"emergency_stop">>} ->
-            train:emergency_stop(Addr);
+            {ok, emergency_stop};
         _ ->
-            logger:warning("mqtt_bridge: unknown train command for ~p: ~s", [Addr, Payload])
+            {error, unknown}
     end.
+
+parse_topic(<<"layout/trains/", Rest/binary>>) ->
+    case binary:split(Rest, <<"/">>) of
+        [AddrBin, <<"cmd">>] ->
+            case catch binary_to_integer(AddrBin) of
+                Addr when is_integer(Addr) -> {train_cmd, Addr};
+                _ -> unknown
+            end;
+        _ -> unknown
+    end;
+parse_topic(_) -> unknown.
+
+%%====================================================================
+%% Command execution
+%%====================================================================
+
+execute_power_command(power_on) -> z21_connection:track_power_on();
+execute_power_command(power_off) -> z21_connection:track_power_off();
+execute_power_command(emergency_stop) -> z21_connection:emergency_stop().
+
+execute_train_command(Addr, {set_speed, Speed}) -> train:set_speed(Addr, Speed);
+execute_train_command(Addr, {set_direction, Dir}) -> train:set_direction(Addr, Dir);
+execute_train_command(Addr, stop) -> train:stop(Addr);
+execute_train_command(Addr, emergency_stop) -> train:emergency_stop(Addr).
 
 %%====================================================================
 %% Outbound MQTT publishing
