@@ -23,7 +23,12 @@ mqtt_bridge_test_() ->
          fun mqtt_emergency_stop_train_sends_speed_one/1,
          fun mqtt_add_train_starts_process/1,
          fun mqtt_remove_train_stops_process/1,
-         fun mqtt_list_trains_publishes_current/1
+         fun mqtt_list_trains_publishes_current/1,
+         fun z21_track_power_on_publishes_state/1,
+         fun z21_track_power_off_publishes_state/1,
+         fun z21_emergency_stop_publishes_state/1,
+         fun z21_loco_info_publishes_train_state/1,
+         fun z21_connection_up_republishes_train_list/1
      ]}.
 
 setup() ->
@@ -244,4 +249,64 @@ mqtt_list_trains_publishes_current({_MockSocket, _ConnPid, _EventsPid, _TrainSup
         Decoded = json:decode(Payload),
         Addresses = lists:sort([maps:get(<<"address">>, T) || T <- Decoded]),
         ?assertEqual([3, 7], Addresses)
+    end.
+
+%%====================================================================
+%% Z21 events forwarded to MQTT tests
+%%====================================================================
+
+z21_track_power_on_publishes_state({_MockSocket, _ConnPid, _EventsPid, _TrainSupPid, _BridgePid}) ->
+    fun() ->
+        meck:reset(emqtt),
+        z21_events:notify({track_power, on}),
+        timer:sleep(50),
+        Calls = find_publish_calls(<<"layout/track/power/state">>),
+        ?assertMatch([{_, <<"on">>, [{qos, 1}, {retain, true}]}], Calls)
+    end.
+
+z21_track_power_off_publishes_state({_MockSocket, _ConnPid, _EventsPid, _TrainSupPid, _BridgePid}) ->
+    fun() ->
+        meck:reset(emqtt),
+        z21_events:notify({track_power, off}),
+        timer:sleep(50),
+        Calls = find_publish_calls(<<"layout/track/power/state">>),
+        ?assertMatch([{_, <<"off">>, [{qos, 1}, {retain, true}]}], Calls)
+    end.
+
+z21_emergency_stop_publishes_state({_MockSocket, _ConnPid, _EventsPid, _TrainSupPid, _BridgePid}) ->
+    fun() ->
+        meck:reset(emqtt),
+        z21_events:notify(emergency_stop),
+        timer:sleep(50),
+        Calls = find_publish_calls(<<"layout/track/power/state">>),
+        ?assertMatch([{_, <<"emergency_stop">>, [{qos, 1}, {retain, true}]}], Calls)
+    end.
+
+z21_loco_info_publishes_train_state({_MockSocket, _ConnPid, _EventsPid, _TrainSupPid, _BridgePid}) ->
+    fun() ->
+        meck:reset(emqtt),
+        z21_events:notify({loco_info, #{address => 3, speed => 75, direction => reverse}}),
+        timer:sleep(50),
+        Calls = find_publish_calls(<<"layout/trains/3/state">>),
+        ?assertMatch([{_, _, [{qos, 1}, {retain, true}]}], Calls),
+        [{_, Payload, _}] = Calls,
+        Decoded = json:decode(Payload),
+        ?assertEqual(3, maps:get(<<"address">>, Decoded)),
+        ?assertEqual(75, maps:get(<<"speed">>, Decoded)),
+        ?assertEqual(<<"reverse">>, maps:get(<<"direction">>, Decoded))
+    end.
+
+z21_connection_up_republishes_train_list({_MockSocket, _ConnPid, _EventsPid, _TrainSupPid, _BridgePid}) ->
+    fun() ->
+        {ok, _} = train_sup:add_train(3),
+        timer:sleep(50),
+        meck:reset(emqtt),
+        z21_events:notify(connection_up),
+        timer:sleep(50),
+        Calls = find_publish_calls(<<"layout/trains/list">>),
+        ?assertMatch([{_, _, _}], Calls),
+        [{_, Payload, _}] = Calls,
+        Decoded = json:decode(Payload),
+        Addresses = [maps:get(<<"address">>, T) || T <- Decoded],
+        ?assertEqual([3], Addresses)
     end.
