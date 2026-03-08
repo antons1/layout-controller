@@ -5,13 +5,14 @@
 %%   layout_controller_sup (rest_for_one)
 %%     ├── z21_events       (gen_server - event pub/sub)
 %%     ├── z21_connection    (gen_server - UDP connection to z21)
+%%     ├── train_sup         (supervisor - one train gen_server per loco)
 %%     ├── mqtt_broker       (gen_server - manages mosquitto process)
-%%     ├── mqtt_bridge       (gen_server - MQTT client bridging to controller)
-%%     └── train_sup         (supervisor - one train gen_server per loco)
+%%     └── mqtt_bridge       (gen_server - MQTT client bridging to controller)
 %%
 %% rest_for_one: if a child crashes, all children started after it
 %% are restarted too. This ensures mqtt_bridge restarts if mqtt_broker
-%% crashes, and train_sup restarts if the bridge crashes.
+%% crashes. train_sup is placed before MQTT children so that MQTT
+%% failures do not cascade to running trains.
 %% @end
 %%%-------------------------------------------------------------------
 
@@ -51,6 +52,12 @@ init([]) ->
             type => worker
         },
         #{
+            id => train_sup,
+            start => {train_sup, start_link, []},
+            restart => permanent,
+            type => supervisor
+        },
+        #{
             id => mqtt_broker,
             start => {mqtt_broker, start_link, [MqttPort]},
             restart => permanent,
@@ -61,12 +68,6 @@ init([]) ->
             start => {mqtt_bridge, start_link, [MqttPort]},
             restart => permanent,
             type => worker
-        },
-        #{
-            id => train_sup,
-            start => {train_sup, start_link, []},
-            restart => permanent,
-            type => supervisor
         }
     ],
     {ok, {SupFlags, ChildSpecs}}.
