@@ -13,7 +13,10 @@ mqtt_bridge_test_() ->
      fun teardown/1,
      [
          fun connect_starts_emqtt_and_subscribes/1,
-         fun connect_publishes_initial_train_list/1
+         fun connect_publishes_initial_train_list/1,
+         fun mqtt_power_on_sends_track_power_on/1,
+         fun mqtt_power_off_sends_track_power_off/1,
+         fun mqtt_emergency_stop_sends_emergency_stop/1
      ]}.
 
 setup() ->
@@ -86,6 +89,11 @@ flush_packets(MockSocket) ->
         {error, timeout} -> ok
     end.
 
+%% Simulate an inbound MQTT message arriving at the bridge
+send_mqtt_message(BridgePid, Topic, Payload) ->
+    BridgePid ! {publish, #{topic => Topic, payload => Payload}},
+    timer:sleep(50).
+
 %% Find all emqtt:publish calls for a given topic in meck history
 find_publish_calls(Topic) ->
     [{T, Payload, Opts}
@@ -108,4 +116,32 @@ connect_publishes_initial_train_list({_MockSocket, _ConnPid, _EventsPid, _TrainS
     fun() ->
         Calls = find_publish_calls(<<"layout/trains/list">>),
         ?assertMatch([{_, <<"[]">>, _}], Calls)
+    end.
+
+%%====================================================================
+%% Inbound MQTT power command tests
+%%====================================================================
+
+mqtt_power_on_sends_track_power_on({MockSocket, _ConnPid, _EventsPid, _TrainSupPid, BridgePid}) ->
+    fun() ->
+        flush_packets(MockSocket),
+        send_mqtt_message(BridgePid, <<"layout/track/power/cmd">>, <<"on">>),
+        {ok, Packet} = recv_packet(MockSocket),
+        ?assertEqual(z21_protocol:encode_track_power_on(), Packet)
+    end.
+
+mqtt_power_off_sends_track_power_off({MockSocket, _ConnPid, _EventsPid, _TrainSupPid, BridgePid}) ->
+    fun() ->
+        flush_packets(MockSocket),
+        send_mqtt_message(BridgePid, <<"layout/track/power/cmd">>, <<"off">>),
+        {ok, Packet} = recv_packet(MockSocket),
+        ?assertEqual(z21_protocol:encode_track_power_off(), Packet)
+    end.
+
+mqtt_emergency_stop_sends_emergency_stop({MockSocket, _ConnPid, _EventsPid, _TrainSupPid, BridgePid}) ->
+    fun() ->
+        flush_packets(MockSocket),
+        send_mqtt_message(BridgePid, <<"layout/track/power/cmd">>, <<"emergency_stop">>),
+        {ok, Packet} = recv_packet(MockSocket),
+        ?assertEqual(z21_protocol:encode_emergency_stop(), Packet)
     end.
