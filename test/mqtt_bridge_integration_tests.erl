@@ -6,30 +6,33 @@
 %% Uses meck to mock emqtt so no running Mosquitto broker is needed.
 %% Starts gproc, z21_events, z21_connection (with mock UDP), train_sup,
 %% and the real mqtt_bridge gen_server.
+%%
+%% Uses {setup, ...} so the fixture is created once for all tests,
+%% avoiding the 1s connect delay per test.
 
 mqtt_bridge_test_() ->
-    {foreach,
+    {setup,
      fun setup/0,
      fun teardown/1,
-     [
-         fun connect_starts_emqtt_and_subscribes/1,
-         fun connect_publishes_initial_train_list/1,
-         fun mqtt_power_on_sends_track_power_on/1,
-         fun mqtt_power_off_sends_track_power_off/1,
-         fun mqtt_emergency_stop_sends_emergency_stop/1,
-         fun mqtt_set_speed_sends_drive_command/1,
-         fun mqtt_set_direction_sends_drive_command/1,
-         fun mqtt_stop_sends_speed_zero/1,
-         fun mqtt_emergency_stop_train_sends_speed_one/1,
-         fun mqtt_add_train_starts_process/1,
-         fun mqtt_remove_train_stops_process/1,
-         fun mqtt_list_trains_publishes_current/1,
-         fun z21_track_power_on_publishes_state/1,
-         fun z21_track_power_off_publishes_state/1,
-         fun z21_emergency_stop_publishes_state/1,
-         fun z21_loco_info_publishes_train_state/1,
-         fun z21_connection_up_republishes_train_list/1
-     ]}.
+     fun(Ctx) -> [
+         connect_starts_emqtt_and_subscribes(Ctx),
+         connect_publishes_initial_train_list(Ctx),
+         mqtt_power_on_sends_track_power_on(Ctx),
+         mqtt_power_off_sends_track_power_off(Ctx),
+         mqtt_emergency_stop_sends_emergency_stop(Ctx),
+         mqtt_set_speed_sends_drive_command(Ctx),
+         mqtt_set_direction_sends_drive_command(Ctx),
+         mqtt_stop_sends_speed_zero(Ctx),
+         mqtt_emergency_stop_train_sends_speed_one(Ctx),
+         mqtt_add_train_starts_process(Ctx),
+         mqtt_remove_train_stops_process(Ctx),
+         mqtt_list_trains_publishes_current(Ctx),
+         z21_track_power_on_publishes_state(Ctx),
+         z21_track_power_off_publishes_state(Ctx),
+         z21_emergency_stop_publishes_state(Ctx),
+         z21_loco_info_publishes_train_state(Ctx),
+         z21_connection_up_republishes_train_list(Ctx)
+     ] end}.
 
 setup() ->
     application:ensure_all_started(gproc),
@@ -113,6 +116,12 @@ find_publish_calls(Topic) ->
         <- meck:history(emqtt),
         T =:= Topic].
 
+%% Remove all trains to reset state between tests
+remove_all_trains() ->
+    lists:foreach(fun(#{address := Addr}) ->
+        train_sup:remove_train(Addr)
+    end, train_sup:which_trains()).
+
 %%====================================================================
 %% Connection lifecycle tests
 %%====================================================================
@@ -169,7 +178,9 @@ mqtt_set_speed_sends_drive_command({MockSocket, _ConnPid, _EventsPid, _TrainSupP
         send_mqtt_message(BridgePid, <<"layout/trains/3/cmd">>,
                           <<"{\"action\":\"set_speed\",\"value\":50}">>),
         {ok, Packet} = recv_packet(MockSocket),
-        ?assertEqual(z21_protocol:encode_set_loco_drive(3, 50, forward), Packet)
+        ?assertEqual(z21_protocol:encode_set_loco_drive(3, 50, forward), Packet),
+        remove_all_trains(),
+        flush_packets(MockSocket)
     end.
 
 mqtt_set_direction_sends_drive_command({MockSocket, _ConnPid, _EventsPid, _TrainSupPid, BridgePid}) ->
@@ -179,7 +190,9 @@ mqtt_set_direction_sends_drive_command({MockSocket, _ConnPid, _EventsPid, _Train
         send_mqtt_message(BridgePid, <<"layout/trains/3/cmd">>,
                           <<"{\"action\":\"set_direction\",\"value\":\"reverse\"}">>),
         {ok, Packet} = recv_packet(MockSocket),
-        ?assertEqual(z21_protocol:encode_set_loco_drive(3, 0, reverse), Packet)
+        ?assertEqual(z21_protocol:encode_set_loco_drive(3, 0, reverse), Packet),
+        remove_all_trains(),
+        flush_packets(MockSocket)
     end.
 
 mqtt_stop_sends_speed_zero({MockSocket, _ConnPid, _EventsPid, _TrainSupPid, BridgePid}) ->
@@ -190,7 +203,9 @@ mqtt_stop_sends_speed_zero({MockSocket, _ConnPid, _EventsPid, _TrainSupPid, Brid
         send_mqtt_message(BridgePid, <<"layout/trains/3/cmd">>,
                           <<"{\"action\":\"stop\"}">>),
         {ok, Packet} = recv_packet(MockSocket),
-        ?assertEqual(z21_protocol:encode_set_loco_drive(3, 0, forward), Packet)
+        ?assertEqual(z21_protocol:encode_set_loco_drive(3, 0, forward), Packet),
+        remove_all_trains(),
+        flush_packets(MockSocket)
     end.
 
 mqtt_emergency_stop_train_sends_speed_one({MockSocket, _ConnPid, _EventsPid, _TrainSupPid, BridgePid}) ->
@@ -200,29 +215,32 @@ mqtt_emergency_stop_train_sends_speed_one({MockSocket, _ConnPid, _EventsPid, _Tr
         send_mqtt_message(BridgePid, <<"layout/trains/3/cmd">>,
                           <<"{\"action\":\"emergency_stop\"}">>),
         {ok, Packet} = recv_packet(MockSocket),
-        ?assertEqual(z21_protocol:encode_set_loco_drive(3, 1, forward), Packet)
+        ?assertEqual(z21_protocol:encode_set_loco_drive(3, 1, forward), Packet),
+        remove_all_trains(),
+        flush_packets(MockSocket)
     end.
 
 %%====================================================================
 %% Inbound MQTT trains management tests
 %%====================================================================
 
-mqtt_add_train_starts_process({_MockSocket, _ConnPid, _EventsPid, _TrainSupPid, BridgePid}) ->
+mqtt_add_train_starts_process({MockSocket, _ConnPid, _EventsPid, _TrainSupPid, BridgePid}) ->
     fun() ->
         meck:reset(emqtt),
         send_mqtt_message(BridgePid, <<"layout/trains/cmd">>,
                           <<"{\"action\":\"add\",\"address\":5}">>),
         ?assertNotEqual(undefined, train:pid(5)),
-        %% Should republish train list with the new train
         Calls = find_publish_calls(<<"layout/trains/list">>),
         ?assertMatch([{_, _, _}], Calls),
         [{_, Payload, _}] = Calls,
         Decoded = json:decode(Payload),
         Addresses = lists:sort([maps:get(<<"address">>, T) || T <- Decoded]),
-        ?assertEqual([5], Addresses)
+        ?assertEqual([5], Addresses),
+        remove_all_trains(),
+        flush_packets(MockSocket)
     end.
 
-mqtt_remove_train_stops_process({_MockSocket, _ConnPid, _EventsPid, _TrainSupPid, BridgePid}) ->
+mqtt_remove_train_stops_process({MockSocket, _ConnPid, _EventsPid, _TrainSupPid, BridgePid}) ->
     fun() ->
         {ok, _} = train_sup:add_train(5),
         timer:sleep(50),
@@ -230,12 +248,12 @@ mqtt_remove_train_stops_process({_MockSocket, _ConnPid, _EventsPid, _TrainSupPid
         send_mqtt_message(BridgePid, <<"layout/trains/cmd">>,
                           <<"{\"action\":\"remove\",\"address\":5}">>),
         ?assertEqual(undefined, train:pid(5)),
-        %% Should republish train list without the removed train
         Calls = find_publish_calls(<<"layout/trains/list">>),
-        ?assertMatch([{_, <<"[]">>, _}], Calls)
+        ?assertMatch([{_, <<"[]">>, _}], Calls),
+        flush_packets(MockSocket)
     end.
 
-mqtt_list_trains_publishes_current({_MockSocket, _ConnPid, _EventsPid, _TrainSupPid, BridgePid}) ->
+mqtt_list_trains_publishes_current({MockSocket, _ConnPid, _EventsPid, _TrainSupPid, BridgePid}) ->
     fun() ->
         {ok, _} = train_sup:add_train(3),
         {ok, _} = train_sup:add_train(7),
@@ -248,7 +266,9 @@ mqtt_list_trains_publishes_current({_MockSocket, _ConnPid, _EventsPid, _TrainSup
         [{_, Payload, _}] = Calls,
         Decoded = json:decode(Payload),
         Addresses = lists:sort([maps:get(<<"address">>, T) || T <- Decoded]),
-        ?assertEqual([3, 7], Addresses)
+        ?assertEqual([3, 7], Addresses),
+        remove_all_trains(),
+        flush_packets(MockSocket)
     end.
 
 %%====================================================================
@@ -296,7 +316,7 @@ z21_loco_info_publishes_train_state({_MockSocket, _ConnPid, _EventsPid, _TrainSu
         ?assertEqual(<<"reverse">>, maps:get(<<"direction">>, Decoded))
     end.
 
-z21_connection_up_republishes_train_list({_MockSocket, _ConnPid, _EventsPid, _TrainSupPid, _BridgePid}) ->
+z21_connection_up_republishes_train_list({MockSocket, _ConnPid, _EventsPid, _TrainSupPid, _BridgePid}) ->
     fun() ->
         {ok, _} = train_sup:add_train(3),
         timer:sleep(50),
@@ -308,5 +328,7 @@ z21_connection_up_republishes_train_list({_MockSocket, _ConnPid, _EventsPid, _Tr
         [{_, Payload, _}] = Calls,
         Decoded = json:decode(Payload),
         Addresses = [maps:get(<<"address">>, T) || T <- Decoded],
-        ?assertEqual([3], Addresses)
+        ?assertEqual([3], Addresses),
+        remove_all_trains(),
+        flush_packets(MockSocket)
     end.
