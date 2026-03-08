@@ -78,6 +78,15 @@ encode_train_state_defaults_test() ->
 %% JSON decoding tests
 %%====================================================================
 
+decode_malformed_json_returns_error_test() ->
+    ?assertEqual(error, mqtt_bridge:decode_json(<<"not json">>)).
+
+decode_malformed_json_in_trains_command_test() ->
+    ?assertEqual({error, unknown}, mqtt_bridge:parse_trains_command(<<"not json">>)).
+
+decode_malformed_json_in_train_command_test() ->
+    ?assertEqual({error, unknown}, mqtt_bridge:parse_train_command(<<"{{bad">>)).
+
 decode_simple_object_test() ->
     Result = mqtt_bridge:decode_json(<<"{\"action\":\"stop\"}">>),
     ?assertEqual(<<"stop">>, maps:get(<<"action">>, Result)).

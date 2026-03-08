@@ -277,9 +277,11 @@ encode_json_field(K, V) ->
     <<"\"", Key/binary, "\":", (encode_json(V))/binary>>.
 
 decode_json(Bin) ->
-    %% Minimal JSON object decoder — handles flat objects with string,
-    %% integer, and boolean values. Sufficient for our command protocol.
-    json:decode(Bin).
+    try json:decode(Bin)
+    catch _:_ ->
+        logger:warning("mqtt_bridge: invalid JSON: ~s", [Bin]),
+        error
+    end.
 
 join_binary([], _Sep) -> <<>>;
 join_binary([H], _Sep) -> H;
