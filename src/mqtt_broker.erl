@@ -40,16 +40,9 @@ init([MqttPort]) ->
     case start_mosquitto(MqttPort) of
         {ok, Port, ConfigFile} ->
             OsPid = get_os_pid(Port),
-            case wait_for_port(MqttPort, 50, 100) of
-                ok ->
-                    logger:notice("mqtt_broker started mosquitto on port ~p", [MqttPort]),
-                    {ok, #state{port = Port, os_pid = OsPid, mqtt_port = MqttPort,
-                                config_file = ConfigFile}};
-                {error, timeout} ->
-                    kill_os_process(OsPid),
-                    port_close(Port),
-                    {stop, mosquitto_start_timeout}
-            end;
+            logger:notice("mqtt_broker started mosquitto on port ~p", [MqttPort]),
+            {ok, #state{port = Port, os_pid = OsPid, mqtt_port = MqttPort,
+                        config_file = ConfigFile}};
         {error, Reason} ->
             {stop, Reason}
     end.
@@ -113,17 +106,6 @@ kill_os_process(OsPid) ->
     os:cmd("kill " ++ integer_to_list(OsPid)),
     ok.
 
-wait_for_port(_Port, _Interval, 0) ->
-    {error, timeout};
-wait_for_port(Port, Interval, Retries) ->
-    case gen_tcp:connect("127.0.0.1", Port, [], 100) of
-        {ok, Sock} ->
-            gen_tcp:close(Sock),
-            ok;
-        {error, _} ->
-            timer:sleep(Interval),
-            wait_for_port(Port, Interval, Retries - 1)
-    end.
 
 write_config(MqttPort) ->
     ConfigContent = io_lib:format(
