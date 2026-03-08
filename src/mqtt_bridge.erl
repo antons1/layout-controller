@@ -32,8 +32,10 @@
 -export([parse_topic/1]).
 -endif.
 
+-define(CONNECT_DELAY, 1000).
+
 -record(state, {
-    mqtt_client :: pid(),
+    mqtt_client :: pid() | undefined,
     mqtt_port :: inet:port_number()
 }).
 
@@ -50,21 +52,32 @@ start_link(MqttPort) ->
 
 init([MqttPort]) ->
     z21_events:subscribe(),
-    case connect_mqtt(MqttPort) of
-        {ok, Client} ->
-            subscribe_to_commands(Client),
-            publish_train_list(Client),
-            logger:notice("mqtt_bridge connected to broker on port ~p", [MqttPort]),
-            {ok, #state{mqtt_client = Client, mqtt_port = MqttPort}};
-        {error, Reason} ->
-            {stop, Reason}
-    end.
+    erlang:send_after(?CONNECT_DELAY, self(), connect),
+    {ok, #state{mqtt_client = undefined, mqtt_port = MqttPort}}.
 
 handle_call(_Request, _From, State) ->
     {reply, {error, unknown_call}, State}.
 
 handle_cast(_Msg, State) ->
     {noreply, State}.
+
+%% Deferred connection to MQTT broker
+handle_info(connect, #state{mqtt_client = undefined, mqtt_port = MqttPort} = State) ->
+    case connect_mqtt(MqttPort) of
+        {ok, Client} ->
+            subscribe_to_commands(Client),
+            publish_train_list(Client),
+            logger:notice("mqtt_bridge connected to broker on port ~p", [MqttPort]),
+            {noreply, State#state{mqtt_client = Client}};
+        {error, Reason} ->
+            {stop, {mqtt_connect_failed, Reason}, State}
+    end;
+
+%% Drop messages while disconnected
+handle_info({publish, _}, #state{mqtt_client = undefined} = State) ->
+    {noreply, State};
+handle_info({z21_event, _}, #state{mqtt_client = undefined} = State) ->
+    {noreply, State};
 
 %% MQTT messages from the broker
 handle_info({publish, #{topic := Topic, payload := Payload}}, State) ->
@@ -116,7 +129,10 @@ connect_mqtt(MqttPort) ->
     }),
     case emqtt:connect(Client) of
         {ok, _Props} -> {ok, Client};
-        {error, _} = Err -> Err
+        {error, _} = Err ->
+            unlink(Client),
+            exit(Client, shutdown),
+            Err
     end.
 
 subscribe_to_commands(Client) ->
