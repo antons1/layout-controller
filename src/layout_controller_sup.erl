@@ -6,13 +6,17 @@
 %%     ├── z21_events       (gen_server - event pub/sub)
 %%     ├── z21_connection    (gen_server - UDP connection to z21)
 %%     ├── train_sup         (supervisor - one train gen_server per loco)
-%%     ├── mqtt_broker       (gen_server - manages mosquitto process)
-%%     └── mqtt_bridge       (gen_server - MQTT client bridging to controller)
+%%     ├── mqtt_broker       (gen_server - manages mosquitto process, optional)
+%%     └── mqtt_bridge       (gen_server - MQTT client bridging to controller, optional)
 %%
 %% rest_for_one: if a child crashes, all children started after it
 %% are restarted too. This ensures mqtt_bridge restarts if mqtt_broker
 %% crashes. train_sup is placed before MQTT children so that MQTT
 %% failures do not cascade to running trains.
+%%
+%% MQTT children are only started when {mqtt_enabled, true} is set in
+%% app config. When disabled, the app runs without MQTT (useful for
+%% REPL-based development without Mosquitto installed).
 %% @end
 %%%-------------------------------------------------------------------
 
@@ -30,6 +34,7 @@ start_link() ->
 
 init([]) ->
     Z21Ip = application:get_env(layout_controller, z21_ip, "192.168.0.111"),
+    MqttEnabled = application:get_env(layout_controller, mqtt_enabled, true),
     MqttPort = application:get_env(layout_controller, mqtt_port, 1883),
 
     SupFlags = #{
@@ -38,7 +43,7 @@ init([]) ->
         period => 10
     },
 
-    ChildSpecs = [
+    CoreChildren = [
         #{
             id => z21_events,
             start => {z21_events, start_link, []},
@@ -56,18 +61,28 @@ init([]) ->
             start => {train_sup, start_link, []},
             restart => permanent,
             type => supervisor
-        },
-        #{
-            id => mqtt_broker,
-            start => {mqtt_broker, start_link, [MqttPort]},
-            restart => permanent,
-            type => worker
-        },
-        #{
-            id => mqtt_bridge,
-            start => {mqtt_bridge, start_link, [MqttPort]},
-            restart => permanent,
-            type => worker
         }
     ],
-    {ok, {SupFlags, ChildSpecs}}.
+
+    MqttChildren = case MqttEnabled of
+        true ->
+            [
+                #{
+                    id => mqtt_broker,
+                    start => {mqtt_broker, start_link, [MqttPort]},
+                    restart => permanent,
+                    type => worker
+                },
+                #{
+                    id => mqtt_bridge,
+                    start => {mqtt_bridge, start_link, [MqttPort]},
+                    restart => permanent,
+                    type => worker
+                }
+            ];
+        false ->
+            logger:notice("MQTT disabled by configuration"),
+            []
+    end,
+
+    {ok, {SupFlags, CoreChildren ++ MqttChildren}}.

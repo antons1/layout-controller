@@ -34,7 +34,11 @@ rebar3 eunit --module=z21_protocol_tests  # run a single test module
 
 ## Configuration
 
-Z21 IP address is configured in `config/sys.config` (default: `192.168.0.111`).
+Configuration lives in `config/sys.config`:
+
+- `z21_ip` - Z21 command station IP (default: `"192.168.0.111"`)
+- `mqtt_enabled` - Start MQTT broker and bridge (default: `true`). Set to `false` for REPL-only development without Mosquitto.
+- `mqtt_port` - MQTT broker port (default: `1883`)
 
 ## Architecture
 
@@ -44,11 +48,13 @@ Z21 IP address is configured in `config/sys.config` (default: `192.168.0.111`).
 layout_controller_sup
   ├── z21_events        - pub/sub event bus (gen_server)
   ├── z21_connection    - UDP connection to Z21 (gen_server)
-  └── train_sup         - dynamic supervisor for train processes
-        └── train       - one gen_server per locomotive (simple_one_for_one)
+  ├── train_sup         - dynamic supervisor for train processes
+  │     └── train       - one gen_server per locomotive (simple_one_for_one)
+  ├── mqtt_broker       - manages Mosquitto process (optional)
+  └── mqtt_bridge       - MQTT client bridging to controller (optional)
 ```
 
-`rest_for_one` ensures that if `z21_events` or `z21_connection` crash, downstream dependents restart too.
+`rest_for_one` ensures that if `z21_events` or `z21_connection` crash, downstream dependents restart too. `train_sup` is placed before MQTT children so that MQTT failures don't cascade to running trains. MQTT children are only started when `mqtt_enabled` is `true`.
 
 **Key modules:**
 
@@ -58,7 +64,10 @@ layout_controller_sup
 - `train` - Per-locomotive gen_server. Holds desired speed/direction, sends drive commands via `z21_connection`, and reacts to Z21 events (power off, emergency stop, loco info updates). Registered via gproc with name `{n, l, {train, Address}}`.
 - `train_sup` - Dynamic supervisor. Use `train_sup:add_train(Address)` / `remove_train(Address)` to manage locomotives at runtime.
 
-**Dependencies:** `gproc` (process registry for dynamic train name lookup).
+**Dependencies:**
+- `gproc` - process registry for dynamic train name lookup
+- `emqtt` - MQTT client library (used by `mqtt_bridge`)
+- [Mosquitto](https://mosquitto.org/) - MQTT broker, must be installed on the system and available in PATH (only needed when `mqtt_enabled` is `true`)
 
 ## Interactive Usage (in rebar3 shell)
 
