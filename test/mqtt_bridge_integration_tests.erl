@@ -16,7 +16,11 @@ mqtt_bridge_test_() ->
          fun connect_publishes_initial_train_list/1,
          fun mqtt_power_on_sends_track_power_on/1,
          fun mqtt_power_off_sends_track_power_off/1,
-         fun mqtt_emergency_stop_sends_emergency_stop/1
+         fun mqtt_emergency_stop_sends_emergency_stop/1,
+         fun mqtt_set_speed_sends_drive_command/1,
+         fun mqtt_set_direction_sends_drive_command/1,
+         fun mqtt_stop_sends_speed_zero/1,
+         fun mqtt_emergency_stop_train_sends_speed_one/1
      ]}.
 
 setup() ->
@@ -144,4 +148,49 @@ mqtt_emergency_stop_sends_emergency_stop({MockSocket, _ConnPid, _EventsPid, _Tra
         send_mqtt_message(BridgePid, <<"layout/track/power/cmd">>, <<"emergency_stop">>),
         {ok, Packet} = recv_packet(MockSocket),
         ?assertEqual(z21_protocol:encode_emergency_stop(), Packet)
+    end.
+
+%%====================================================================
+%% Inbound MQTT train command tests
+%%====================================================================
+
+mqtt_set_speed_sends_drive_command({MockSocket, _ConnPid, _EventsPid, _TrainSupPid, BridgePid}) ->
+    fun() ->
+        {ok, _} = train_sup:add_train(3),
+        flush_packets(MockSocket),
+        send_mqtt_message(BridgePid, <<"layout/trains/3/cmd">>,
+                          <<"{\"action\":\"set_speed\",\"value\":50}">>),
+        {ok, Packet} = recv_packet(MockSocket),
+        ?assertEqual(z21_protocol:encode_set_loco_drive(3, 50, forward), Packet)
+    end.
+
+mqtt_set_direction_sends_drive_command({MockSocket, _ConnPid, _EventsPid, _TrainSupPid, BridgePid}) ->
+    fun() ->
+        {ok, _} = train_sup:add_train(3),
+        flush_packets(MockSocket),
+        send_mqtt_message(BridgePid, <<"layout/trains/3/cmd">>,
+                          <<"{\"action\":\"set_direction\",\"value\":\"reverse\"}">>),
+        {ok, Packet} = recv_packet(MockSocket),
+        ?assertEqual(z21_protocol:encode_set_loco_drive(3, 0, reverse), Packet)
+    end.
+
+mqtt_stop_sends_speed_zero({MockSocket, _ConnPid, _EventsPid, _TrainSupPid, BridgePid}) ->
+    fun() ->
+        {ok, _} = train_sup:add_train(3),
+        train:set_speed(3, 50),
+        flush_packets(MockSocket),
+        send_mqtt_message(BridgePid, <<"layout/trains/3/cmd">>,
+                          <<"{\"action\":\"stop\"}">>),
+        {ok, Packet} = recv_packet(MockSocket),
+        ?assertEqual(z21_protocol:encode_set_loco_drive(3, 0, forward), Packet)
+    end.
+
+mqtt_emergency_stop_train_sends_speed_one({MockSocket, _ConnPid, _EventsPid, _TrainSupPid, BridgePid}) ->
+    fun() ->
+        {ok, _} = train_sup:add_train(3),
+        flush_packets(MockSocket),
+        send_mqtt_message(BridgePid, <<"layout/trains/3/cmd">>,
+                          <<"{\"action\":\"emergency_stop\"}">>),
+        {ok, Packet} = recv_packet(MockSocket),
+        ?assertEqual(z21_protocol:encode_set_loco_drive(3, 1, forward), Packet)
     end.
