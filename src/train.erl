@@ -106,8 +106,9 @@ handle_cast({set_direction, Direction}, State) ->
     {noreply, NewState};
 
 handle_cast(emergency_stop, State) ->
-    NewState = State#state{speed = 1},
-    send_drive_command(NewState),
+    NewState = State#state{speed = 0},
+    %% Speed 1 is emergency stop in DCC 128 speed step mode
+    z21_connection:set_loco_drive(State#state.address, 1, State#state.direction),
     {noreply, NewState};
 
 handle_cast(_Msg, State) ->

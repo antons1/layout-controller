@@ -127,7 +127,10 @@ emergency_stop_sends_speed_one({MockSocket, _ConnPid, _EventsPid, _TrainSupPid})
         train:emergency_stop(3),
         {ok, Packet} = recv_packet(MockSocket),
         %% Speed 1 = emergency stop in 128 speed step mode
-        ?assertEqual(z21_protocol:encode_set_loco_drive(3, 1, forward), Packet)
+        ?assertEqual(z21_protocol:encode_set_loco_drive(3, 1, forward), Packet),
+        %% Internal state should show speed 0, not the protocol value
+        State = train:get_state(3),
+        ?assertEqual(0, maps:get(speed, State))
     end.
 
 which_trains_lists_active({_MockSocket, _ConnPid, _EventsPid, _TrainSupPid}) ->
