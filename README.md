@@ -10,6 +10,34 @@ It is also a learning project for me to get more familiar with in which ways it 
 
 The plan is for this to be able to run my own train layot, with whatever hardware I have. I want to create some sort of UI, and I want to be able to use this to automate parts of the layout - e.g. running some background trains, running switches etc. It should also be doable to run against different DCC hardware than z21, but that is a future endeavor.
 
+## Quick start
+
+Prerequisites: [Erlang/OTP 28+](https://www.erlang.org/), [rebar3](https://rebar3.org/), and a Roco Z21 command station on your network. If you want the MQTT interface, install [Mosquitto](https://mosquitto.org/) as well.
+
+```bash
+git clone https://github.com/hakon/layout_controller.git
+cd layout_controller
+
+# Set your Z21's IP address (find it via the Z21 Maintenance app)
+# Edit config/sys.config and change z21_ip if it's not 192.168.0.111
+
+# If you don't have Mosquitto installed, disable MQTT:
+# Set {mqtt_enabled, false} in config/sys.config
+
+rebar3 compile
+rebar3 shell
+```
+
+Once in the shell, turn on track power and drive a train:
+
+```erlang
+z21_connection:track_power_on().
+train_sup:add_train(3).          % use your locomotive's DCC address
+train:set_speed(3, 50).
+train:set_direction(3, reverse).
+train:stop(3).
+```
+
 ## Architecture
 
 ```
